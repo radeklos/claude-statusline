@@ -9,18 +9,18 @@ It supports both personal Pro/Max accounts (5h and 7d rolling windows) and Enter
 **Personal Pro/Max account:**
 
 ```
-myproject • feature/billing | Claude Sonnet 4.6 • high | ctx 12% | s: $0.47 | 5h: 42% • 2h15m | 7d: 3d6h used 25% ███░░░░░░░ 3d18h left | avg 7.7%/d • 20%/d left
+myproject • feature/billing | Claude Sonnet 4.6 • high | ctx 12% | s: $0.47 | 5h: 42% • 2h15m | 7d: 3d6h used 25% ███░░░░░░░ 3d18h left | avg 7.7%/d • 20%/d left | ↳ Add billing page and Stripe webhook handling
 ```
 
 **Enterprise account:**
 
 ```
-myproject • feature/billing | Claude Opus 4.7 • xhigh | ctx 22% | s: $1.20 | M: $67 17d used 22% ██░░░░░░░░ $233 14d left | avg $3.94/d • $16.64/d left
+myproject • feature/billing | Claude Opus 4.7 • xhigh | ctx 22% | s: $1.20 | M: $67 17d used 22% ██░░░░░░░░ $233 14d left | avg $3.94/d • $16.64/d left | ↳ Migrate the reports service to the new auth client
 ```
 
 ## Features
 
-- **Conversation recap** — when Claude Code passes a `transcript_path`, a last segment, after all usage/price segments, summarizes what the session is about (at most 10 words, `CLAUDE_STATUSLINE_RECAP_WORDS`). The summary comes from a short `claude -p --model haiku` call over the session's first and most recent prompts. It runs detached in the background, so rendering never waits on it, and is refreshed when the transcript has grown by ~50%. Until the first summary lands, or if the call fails, the first prompt cut to 10 words is shown instead. Cached per transcript next to the usage cache. Set `CLAUDE_STATUSLINE_RECAP_CMD` to use a different command (it reads the prompts on stdin and gets the instruction as `$1`).
+- **Session summary** (conversation recap) — when Claude Code passes a `transcript_path`, a last segment, after all usage/price segments, summarizes what the session is about (at most 10 words, `CLAUDE_STATUSLINE_RECAP_WORDS`). The summary comes from a short `claude -p --model haiku` call over the session's first and most recent prompts. It runs detached in the background, so rendering never waits on it, and is refreshed when the transcript has grown by ~50%. Until the first summary lands, or if the call fails, the first prompt cut to 10 words is shown instead. Cached per transcript next to the usage cache. Set `CLAUDE_STATUSLINE_RECAP_CMD` to use a different command (it reads the prompts on stdin and gets the instruction as `$1`).
 - **Directory & branch** — basename of the working directory (`$HOME` shown as `~`), plus the current git branch. Inside a git worktree the main repo's name is shown as the directory, and the branch is prefixed with the worktree name so it's distinguishable from the main repo: `wt-name@branch`, or `wt-name@<sha>` when detached. Detached HEAD in the main repo shows as `@<sha>`; outside a repo the branch is omitted.
 - **Model & effort** — model name, optionally followed by the effort level (`model • high`, `model • xhigh`, …) when available.
 - **Context & cost** — current context window usage and session cost. `/clear` empties the context but does **not** reset the session cost, which keeps accumulating until you start a new session.
@@ -42,7 +42,7 @@ Both options end with `~/.claude/statusline.sh` in place and the same `settings.
 Clone the repo and symlink the script into `~/.claude/`:
 
 ```bash
-git clone https://github.com/martiner/claude-statusline.git
+git clone https://github.com/radeklos/claude-statusline.git
 ln -s "$(pwd)/claude-statusline/statusline.sh" ~/.claude/statusline.sh
 ```
 
@@ -72,6 +72,7 @@ With either option, add the following to `~/.claude/settings.json`:
 ### Requirements
 
 - `jq`, `curl`, `git`, `date`
+- `claude` on `PATH` for the session summary (optional: without it the recap falls back to the first prompt)
 - Claude Code **v1.2.80+** (needed for the `rate_limits` field in the stdin JSON)
 - macOS, Linux/WSL, or Windows. On macOS the OAuth token is read from the Keychain (`security find-generic-password -s "Claude Code-credentials"`); on Linux/WSL/Windows from `~/.claude/.credentials.json`.
 - On native Windows the script runs under the Git Bash that ships with Git for Windows, and `jq` (e.g. installed via `winget`) must be on `PATH`.
