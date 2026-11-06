@@ -53,7 +53,7 @@ format_clock() {
 }
 
 # === Parse stdin JSON ===
-IFS=$'\t' read -r model effort cwd ctx_pct cost five_pct five_reset week_pct week_reset < <(
+IFS=$'\t' read -r model effort cwd ctx_pct cost five_pct five_reset week_pct week_reset transcript < <(
     echo "$input" | jq -r '
         [
             .model.display_name                       // "?",
@@ -64,7 +64,8 @@ IFS=$'\t' read -r model effort cwd ctx_pct cost five_pct five_reset week_pct wee
             (.rate_limits.five_hour.used_percentage   // 0),
             (.rate_limits.five_hour.resets_at         // 0),
             (.rate_limits.seven_day.used_percentage   // 0),
-            (.rate_limits.seven_day.resets_at         // 0)
+            (.rate_limits.seven_day.resets_at         // 0),
+            (.transcript_path                         // "")
         ] | @tsv
     ' | tr -d '\r'
 )
@@ -267,6 +268,85 @@ elif [ -n "$is_detached" ]; then
     branch="@${branch}"
 fi
 
+# === Conversation recap (last segment) ===
+# A short semantic summary of what the session is about. Summarizing needs an LLM
+# call (seconds), far over the status line's latency budget, so it runs detached in
+# the background and lands in a cache; each render only reads that cache. Until the
+# first summary exists (and if the call fails) the first user prompt, cut to
+# RECAP_WORDS words, is shown instead. The summary is refreshed when the transcript
+# has grown by 50% (+20KB) since the last one. Cache file, 3 lines: transcript
+# path, transcript size at summary time, summary.
+RECAP_WORDS="${CLAUDE_STATUSLINE_RECAP_WORDS:-10}"
+RECAP_CACHE="${USAGE_CACHE}.recap"
+RECAP_LOCK="${USAGE_CACHE}.recap.lock"
+# Override with CLAUDE_STATUSLINE_RECAP_CMD (reads prompts on stdin, takes the instruction as $1).
+recap_llm() {
+    if [ -n "${CLAUDE_STATUSLINE_RECAP_CMD:-}" ]; then $CLAUDE_STATUSLINE_RECAP_CMD "$1"
+    else claude -p --model haiku --no-session-persistence --disable-slash-commands --setting-sources "" "$1"
+    fi
+}
+
+# Text of the session's real user prompts (no meta, sidechain, or <tag> messages),
+# one per line, newlines collapsed.
+transcript_prompts() {
+    jq -r '
+        select(.type == "user" and (.isMeta | not) and (.isSidechain | not))
+        | .message.content
+        | if type == "array" then map(select(.type == "text") | .text) | join(" ") else . end
+        | select(type == "string" and test("\\S") and (ltrimstr(" ") | startswith("<") | not))
+        | gsub("\\s+"; " ")
+    ' "$1" 2>/dev/null | tr -d '\r'
+}
+
+transcript_size() {
+    if [ "$(uname)" = "Darwin" ]; then stat -f %z "$1" 2>/dev/null
+    else                                stat -c %s "$1" 2>/dev/null
+    fi
+}
+
+# Detached: summarize the first and the most recent prompts, write the cache.
+refresh_recap() {
+    local tr="$1" size="$2" prompts summary
+    prompts=$(transcript_prompts "$tr")
+    prompts=$( { printf '%s\n' "$prompts" | head -n 2; printf '%s\n' "$prompts" | tail -n 5; } | cut -c1-300)
+    summary=$(printf '%s\n' "$prompts" | recap_llm \
+        "Above are the user's prompts from one coding session. Describe in at most ${RECAP_WORDS} words what the session is about (the goal or task, not a list of steps). Same language as the prompts. Output only the description: no quotes, no trailing period." \
+        2>/dev/null | head -n 1 | tr -d '\r' | tr -s '[:space:]' ' ')
+    summary="${summary# }"
+    [ -n "$summary" ] && printf '%s\n%s\n%s\n' "$tr" "$size" "$summary" > "$RECAP_CACHE"
+    rmdir "$RECAP_LOCK" 2>/dev/null
+}
+
+recap_part=""
+if [ -n "$transcript" ] && [ -r "$transcript" ]; then
+    recap=""; cached_size=0
+    if [ -f "$RECAP_CACHE" ]; then
+        { IFS= read -r cached_path; IFS= read -r cached_size; IFS= read -r cached_recap; } < "$RECAP_CACHE"
+        [ "$cached_path" = "$transcript" ] && recap="$cached_recap" || cached_size=0
+    fi
+
+    cur_size=$(transcript_size "$transcript"); cur_size=${cur_size:-0}
+    if [ -z "$recap" ] || [ "$cur_size" -gt $(( cached_size * 3 / 2 + 20000 )) ]; then
+        # Stale lock (crashed refresh) older than 2 minutes is cleared.
+        [ -d "$RECAP_LOCK" ] && [ -n "$(find "$RECAP_LOCK" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$RECAP_LOCK" 2>/dev/null
+        if mkdir "$RECAP_LOCK" 2>/dev/null; then
+            ( refresh_recap "$transcript" "$cur_size" ) >/dev/null 2>&1 &
+            disown 2>/dev/null
+        fi
+    fi
+
+    if [ -z "$recap" ]; then
+        # Fallback until the first summary lands: the first prompt, trimmed.
+        recap=$(transcript_prompts "$transcript" | head -n 1)
+        set -f; set -- $recap; set +f
+        words=("$@")
+        if [ "${#words[@]}" -gt "$RECAP_WORDS" ]; then
+            recap="${words[*]:0:$RECAP_WORDS}…"
+        fi
+    fi
+    [ -n "$recap" ] && recap_part=$(printf '\033[90m↳ %s\033[0m' "$recap")
+fi
+
 # === Build output — segments are appended conditionally ===
 now=$(date +%s)
 ctx_pct_int=$(printf '%.0f' "$ctx_pct")
@@ -285,9 +365,9 @@ if [ -n "$effort" ] && [ "$effort" != "-" ]; then
 else
     parts+=("$(printf '\033[90m%s\033[0m' "$model")")
 fi
-# group ctx (context fill, cleared by /clear) and session cost (cumulative, survives /clear) with a bullet
-session_part="$(color_by_pct "$ctx_pct" "ctx ${ctx_pct_int}%")${bullet}$(printf '\033[36m%s\033[0m' "$cost_fmt")"
-parts+=("$session_part")
+# ctx (context fill, cleared by /clear) and session cost (cumulative, survives /clear) are separate segments
+parts+=("$(color_by_pct "$ctx_pct" "ctx ${ctx_pct_int}%")")
+parts+=("$(printf '\033[36m%s\033[0m' "$cost_fmt")")
 
 # 5h/7d windows — only if resets_at is in the future (else Enterprise or inactive).
 # Right after CC starts the server often sends a placeholder (pct=0, reset≈now);
@@ -388,9 +468,13 @@ elif [ -n "$money_left" ]; then
     parts+=("$(color_by_pct "$spent_pct" "M: ${money_left} left")")
 fi
 
+# Recap goes last, after every usage/price segment.
+[ -n "$recap_part" ] && parts+=("$recap_part")
+
 # Join segments with the separator
 output="${parts[0]}"
 for ((i=1; i<${#parts[@]}; i++)); do
     output="${output}${sep}${parts[i]}"
 done
 printf '%s\n' "$output"
+

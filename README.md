@@ -9,17 +9,18 @@ It supports both personal Pro/Max accounts (5h and 7d rolling windows) and Enter
 **Personal Pro/Max account:**
 
 ```
-myproject • feature/billing | Claude Sonnet 4.6 • high | ctx 12% • s: $0.47 | 5h: 42% • 2h15m | 7d: 3d6h used 25% ███░░░░░░░ 3d18h left | avg 7.7%/d • 20%/d left
+myproject • feature/billing | Claude Sonnet 4.6 • high | ctx 12% | s: $0.47 | 5h: 42% • 2h15m | 7d: 3d6h used 25% ███░░░░░░░ 3d18h left | avg 7.7%/d • 20%/d left
 ```
 
 **Enterprise account:**
 
 ```
-myproject • feature/billing | Claude Opus 4.7 • xhigh | ctx 22% • s: $1.20 | M: $67 17d used 22% ██░░░░░░░░ $233 14d left | avg $3.94/d • $16.64/d left
+myproject • feature/billing | Claude Opus 4.7 • xhigh | ctx 22% | s: $1.20 | M: $67 17d used 22% ██░░░░░░░░ $233 14d left | avg $3.94/d • $16.64/d left
 ```
 
 ## Features
 
+- **Conversation recap** — when Claude Code passes a `transcript_path`, a last segment, after all usage/price segments, shows the session's first prompt, cut to 10 words (`CLAUDE_STATUSLINE_RECAP_WORDS`). Cached per transcript next to the usage cache.
 - **Directory & branch** — basename of the working directory (`$HOME` shown as `~`), plus the current git branch. Inside a git worktree the main repo's name is shown as the directory, and the branch is prefixed with the worktree name so it's distinguishable from the main repo: `wt-name@branch`, or `wt-name@<sha>` when detached. Detached HEAD in the main repo shows as `@<sha>`; outside a repo the branch is omitted.
 - **Model & effort** — model name, optionally followed by the effort level (`model • high`, `model • xhigh`, …) when available.
 - **Context & cost** — current context window usage and session cost. `/clear` empties the context but does **not** reset the session cost, which keeps accumulating until you start a new session.

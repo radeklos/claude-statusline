@@ -876,6 +876,20 @@ else
     assert_not_contains "comma locale: no comma in cost"   "\$1,"     "$OUT"
 fi
 
+# ─── [9] Conversation recap ──────────────────────────────────────────────────
+echo ""
+echo "[9] Conversation recap (last segment)"
+TR="$SANDBOX/transcript.jsonl"
+printf '%s\n' \
+    '{"type":"user","isMeta":true,"message":{"content":"meta"}}' \
+    '{"type":"user","message":{"content":"<command-name>/x</command-name>"}}' \
+    '{"type":"user","message":{"content":[{"type":"text","text":"fix the login bug in the auth service so that tokens refresh properly now"}]}}' > "$TR"
+OUT=$(run_script "{\"model\":{\"display_name\":\"X\"},\"transcript_path\":\"$TR\"}")
+assert_contains "recap last, capped at 10 words" " | ↳ fix the login bug in the auth service so that…" "$OUT"
+assert_contains "cost is its own segment"                 " | s: \$0.00"                                      "$OUT"
+OUT=$(run_script '{"model":{"display_name":"X"}}')
+assert_not_contains "no recap without transcript"          "↳"                                                  "$OUT"
+
 # ─── Summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASS+FAIL))
